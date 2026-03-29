@@ -14,15 +14,11 @@
 
 #include "depth_anything_v3/depth_anything_v3_node.hpp"
 
-#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 #include <chrono>
-#include <iomanip>
-#include <sstream>
-#include <numeric>
-#include <unordered_map>
+#include <stdexcept>
 
 namespace
 {
@@ -52,7 +48,6 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
 : Node("depth_anything_v3", node_options)
 {
   using std::placeholders::_1;
-  using std::placeholders::_2;
   
   // Parameter
   set_param_res_ =
@@ -61,61 +56,57 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   node_param_.onnx_path = declare_parameter<std::string>(
     "onnx_path", "models/DA3METRIC-LARGE.fp16-batch1.engine");
   node_param_.precision = declare_parameter<std::string>("precision", "fp16");
-  
-  // Debug parameters
-  node_param_.enable_debug = declare_parameter<bool>("enable_debug", false);
-  node_param_.debug_colormap = declare_parameter<std::string>("debug_colormap", "JET");
-  node_param_.debug_filepath = declare_parameter<std::string>(
-    "debug_filepath", "/tmp/depth_anything_v3_debug/");
-  node_param_.write_colormap = declare_parameter<bool>("write_colormap", true);
-  node_param_.debug_colormap_min_depth = declare_parameter<double>("debug_colormap_min_depth", 2.0);
-  node_param_.debug_colormap_max_depth = declare_parameter<double>("debug_colormap_max_depth", 100.0);
   node_param_.sky_threshold = declare_parameter<double>("sky_threshold", 0.3);
   node_param_.sky_depth_cap = declare_parameter<double>("sky_depth_cap", 200.0);
+  node_param_.input_image_topic = declare_parameter<std::string>("input_image_topic", "");
+  node_param_.input_camera_info_topic =declare_parameter<std::string>("input_camera_info_topic", "");
+  node_param_.output_depth_topic = declare_parameter<std::string>("output_depth_topic", "");
+  node_param_.output_point_cloud_topic = declare_parameter<std::string>("output_point_cloud_topic", "");
+  if (node_param_.input_image_topic.empty() || node_param_.input_camera_info_topic.empty()) {
+    throw std::runtime_error(
+      "Input topic parameters 'input_image_topic' and 'input_camera_info_topic' must be non-empty.");
+  }
+  if (node_param_.output_depth_topic.empty()) {
+    node_param_.output_depth_topic = "output/depth_image";
+  }
+  if (node_param_.output_point_cloud_topic.empty()) {
+    node_param_.output_point_cloud_topic = "output/point_cloud";
+  }
   
   // Point cloud parameters
+  node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
+  if (node_param_.point_cloud_downsample_factor < 1) {
+    throw std::runtime_error(
+      "Parameter 'point_cloud_downsample_factor' must be >= 1.");
+  }
+  RCLCPP_INFO(
+    get_logger(), "Point cloud publishing: %s",
+    node_param_.publish_point_cloud ? "enabled" : "disabled");
   RCLCPP_INFO(get_logger(), "Point cloud downsampling factor: %d (publishing every %dth point)", 
     node_param_.point_cloud_downsample_factor, node_param_.point_cloud_downsample_factor);
 
   RCLCPP_INFO(get_logger(), "Using model file: %s", node_param_.onnx_path.c_str());
 
-  // Synchronized subscribers for image (via image_transport) and camera_info
-  // image_transport supports raw and compressed transports transparently
-  const auto transport = declare_parameter<std::string>("image_transport", "raw");
-  sub_image_.subscribe(this, "~/input/image", transport, rclcpp::SensorDataQoS().get_rmw_qos_profile());
-  sub_camera_info_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::CameraInfo>>(
-    this, "~/input/camera_info", rclcpp::SensorDataQoS().get_rmw_qos_profile());
-  
-  // Use approximate time synchronizer with 100ms tolerance
-  sync_ = std::make_shared<message_filters::Synchronizer<ApproxSyncPolicy>>(
-    ApproxSyncPolicy(10), sub_image_, *sub_camera_info_);
-  sync_->registerCallback(std::bind(&DepthAnythingV3Node::onImageCameraInfo, this, _1, _2));
-  
-  RCLCPP_INFO(get_logger(), "Using ApproximateTime synchronizer with queue size 10");
-
-  // Debug subscribers to check if individual topics are arriving
-  debug_image_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-    "~/input/image", rclcpp::SensorDataQoS(),
-    std::bind(&DepthAnythingV3Node::onImageDebug, this, std::placeholders::_1));
-  debug_camera_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-    "~/input/camera_info", rclcpp::SensorDataQoS(),
-    std::bind(&DepthAnythingV3Node::onCameraInfoDebug, this, std::placeholders::_1));
+  // Create subscriptions
+  sub_image_ = this->create_subscription<sensor_msgs::msg::Image>(
+    node_param_.input_image_topic, rclcpp::SensorDataQoS(),
+    std::bind(&DepthAnythingV3Node::onImage, this, _1));
+  sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+    node_param_.input_camera_info_topic, rclcpp::SensorDataQoS(),
+    std::bind(&DepthAnythingV3Node::onCameraInfo, this, _1));
 
   RCLCPP_INFO(get_logger(), "Depth Anything V3 TensorRT node initialized successfully");
-  RCLCPP_INFO(get_logger(), "Waiting for synchronized messages on:");
-  RCLCPP_INFO(get_logger(), "  - Image topic: ~/input/image");
-  RCLCPP_INFO(get_logger(), "  - Camera info topic: ~/input/camera_info");
+  RCLCPP_INFO(get_logger(), "Waiting for input messages on:");
+  RCLCPP_INFO(get_logger(), "  - Image topic: %s", node_param_.input_image_topic.c_str());
+  RCLCPP_INFO(get_logger(), "  - Camera info topic: %s", node_param_.input_camera_info_topic.c_str());
 
   // Publishers
-  pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>("~/output/depth_image", 1);
-  pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>("~/output/point_cloud", 1);
-  
-  if (node_param_.enable_debug) {
-    pub_depth_image_debug_ = create_publisher<sensor_msgs::msg::Image>(
-      "~/output/depth_image_debug", 1);
-  }
+  pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(node_param_.output_depth_topic, 1);
+  pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_param_.output_point_cloud_topic, 1);
+  RCLCPP_INFO(get_logger(), "Publishing depth image on: %s", node_param_.output_depth_topic.c_str());
+  RCLCPP_INFO(get_logger(), "Publishing point cloud on: %s", node_param_.output_point_cloud_topic.c_str());
 
   // Init TensorRT model
   std::string calibType = "MinMax";
@@ -137,14 +128,20 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
     node_param_.onnx_path, node_param_.precision, build_config, use_gpu_preprocess,
     calibration_images, batch_config, workspace_size);
   tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(node_param_.sky_threshold));
+  tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(node_param_.sky_depth_cap));
     
   RCLCPP_INFO(get_logger(), "Finished initializing Depth Anything V3 TensorRT model");
 }
 
-void DepthAnythingV3Node::onImageCameraInfo(
-  const sensor_msgs::msg::Image::ConstSharedPtr & image_msg,
-  const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
+void DepthAnythingV3Node::onImage(const sensor_msgs::msg::Image::ConstSharedPtr & image_msg)
 {
+  const auto camera_info_msg = std::atomic_load(&latest_camera_info_);
+  if (!camera_info_msg) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Skipping image because no camera_info has been received yet");
+    return;
+  }
 
   cv_bridge::CvImagePtr in_image_ptr;
   try {
@@ -168,7 +165,9 @@ void DepthAnythingV3Node::onImageCameraInfo(
   input_images.push_back(in_image_ptr->image);
   
   auto start = std::chrono::high_resolution_clock::now();
-  bool success = tensorrt_depth_anything_->doInference(input_images, *camera_info_msg, node_param_.point_cloud_downsample_factor, node_param_.colorize_point_cloud);
+  bool success = tensorrt_depth_anything_->doInference(
+    input_images, *camera_info_msg, node_param_.publish_point_cloud,
+    node_param_.point_cloud_downsample_factor, node_param_.colorize_point_cloud);
   auto end = std::chrono::high_resolution_clock::now();
   const double inference_time_sec = std::chrono::duration<double>(end - start).count();
   
@@ -189,67 +188,16 @@ void DepthAnythingV3Node::onImageCameraInfo(
   cv_img_depth.header = image_msg->header;
   pub_depth_image_->publish(*cv_img_depth.toImageMsg());
 
-  // Publish point cloud
-  sensor_msgs::msg::PointCloud2 point_cloud = tensorrt_depth_anything_->getPointCloud();
-  point_cloud.header = image_msg->header;
-  pub_point_cloud_->publish(point_cloud);
-
-  // Publish debug depth image if enabled
-  if (node_param_.enable_debug && pub_depth_image_debug_) {
-    // Normalize depth to [0,255] using configured min/max before visualization
-    cv::Mat depth_norm;
-    const double min_depth = node_param_.debug_colormap_min_depth;
-    const double max_depth = node_param_.debug_colormap_max_depth;
-    
-    // Clamp and normalize in one step
-    cv::Mat clamped;
-    cv::max(depth_image, min_depth, clamped);
-    cv::min(clamped, max_depth, clamped);
-    clamped.convertTo(depth_norm, CV_8UC1, 255.0 / (max_depth - min_depth), -255.0 * min_depth / (max_depth - min_depth));
-    
-    cv::Mat depth_vis_8u;
-    cv::applyColorMap(depth_norm, depth_vis_8u, getColorMapType(node_param_.debug_colormap));
-    
-    // Add FPS text overlay using rolling average
-    static std::vector<double> inference_times;
-    inference_times.push_back(inference_time_sec);
-    if (inference_times.size() > 20) {
-      inference_times.erase(inference_times.begin());
-    }
-
-    const double mean_inference_time = std::accumulate(
-      inference_times.begin(), inference_times.end(), 0.0) / inference_times.size();
-    const int fps = static_cast<int>(1.0 / mean_inference_time);
-    
-    // Extract just the filename from the ONNX path
-    const std::string model_name = std::filesystem::path(node_param_.onnx_path).filename().string();
-    const std::string fps_text = "Depth Anything V3 - " + model_name + " - FPS: " + std::to_string(fps);
-    
-    constexpr int font_face = cv::FONT_HERSHEY_SIMPLEX;
-    constexpr double font_scale = 1.0;
-    constexpr int thickness = 2;
-    int baseline = 0;
-    const cv::Size text_size = cv::getTextSize(fps_text, font_face, font_scale, thickness, &baseline);
-    const cv::Point text_org((depth_vis_8u.cols - text_size.width) / 2, depth_vis_8u.rows - 10);
-    cv::putText(depth_vis_8u, fps_text, text_org, font_face, font_scale, cv::Scalar(255, 255, 255), thickness);
-    
-    // Write to file if enabled
-    if (node_param_.write_colormap) {
-      std::filesystem::create_directories(node_param_.debug_filepath);
-      char timestamp_buf[32];
-      std::snprintf(timestamp_buf, sizeof(timestamp_buf), "%d%09d", 
-                    image_msg->header.stamp.sec, image_msg->header.stamp.nanosec);
-      const std::string filename = node_param_.debug_filepath + "depth_image_" + timestamp_buf + ".jpg";
-      cv::imwrite(filename, depth_vis_8u);
-    }
-    
-    // Publish debug image
-    cv_bridge::CvImage cv_img_debug;
-    cv_img_debug.image = depth_vis_8u;
-    cv_img_debug.encoding = "bgr8";
-    cv_img_debug.header = image_msg->header;
-    pub_depth_image_debug_->publish(*cv_img_debug.toImageMsg());
+  if (node_param_.publish_point_cloud) {
+    sensor_msgs::msg::PointCloud2 point_cloud = tensorrt_depth_anything_->getPointCloud();
+    point_cloud.header = image_msg->header;
+    pub_point_cloud_->publish(point_cloud);
   }
+}
+
+void DepthAnythingV3Node::onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg)
+{
+  std::atomic_store(&latest_camera_info_, std::shared_ptr<const sensor_msgs::msg::CameraInfo>(camera_info_msg));
 }
 
 rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
@@ -258,24 +206,44 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
   rcl_interfaces::msg::SetParametersResult result;
   try {
     auto & p = node_param_;
+    int new_point_cloud_downsample_factor = p.point_cloud_downsample_factor;
+
+    for (const auto & param : params) {
+      const auto & name = param.get_name();
+      if (
+        (name == "input_image_topic" || name == "input_camera_info_topic" ||
+        name == "output_depth_topic" || name == "output_point_cloud_topic") &&
+        (sub_image_ || sub_camera_info_ || pub_depth_image_ || pub_point_cloud_))
+      {
+        result.successful = false;
+        result.reason = "Topic parameters are startup-only and cannot be changed at runtime.";
+        return result;
+      }
+
+      if (name == "point_cloud_downsample_factor") {
+        new_point_cloud_downsample_factor = param.as_int();
+      }
+    }
+
+    if (new_point_cloud_downsample_factor < 1) {
+      result.successful = false;
+      result.reason = "Parameter 'point_cloud_downsample_factor' must be >= 1.";
+      return result;
+    }
     
     // Update all parameters uniformly
     update_param(params, "onnx_path", p.onnx_path);
     update_param(params, "precision", p.precision);
-    update_param(params, "enable_debug", p.enable_debug);
-    update_param(params, "debug_colormap", p.debug_colormap);
-    update_param(params, "debug_filepath", p.debug_filepath);
-    update_param(params, "write_colormap", p.write_colormap);
-    update_param(params, "debug_colormap_min_depth", p.debug_colormap_min_depth);
-    update_param(params, "debug_colormap_max_depth", p.debug_colormap_max_depth);
     update_param(params, "sky_threshold", p.sky_threshold);
     update_param(params, "sky_depth_cap", p.sky_depth_cap);
+    update_param(params, "publish_point_cloud", p.publish_point_cloud);
     update_param(params, "point_cloud_downsample_factor", p.point_cloud_downsample_factor);
     update_param(params, "colorize_point_cloud", p.colorize_point_cloud);
     
     // Apply runtime-configurable model parameters
     if (tensorrt_depth_anything_) {
       tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(p.sky_threshold));
+      tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(p.sky_depth_cap));
     }
   } catch (const rclcpp::exceptions::InvalidParameterTypeException & e) {
     result.successful = false;
@@ -285,53 +253,6 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
   result.successful = true;
   result.reason = "success";
   return result;
-}
-
-int DepthAnythingV3Node::getColorMapType(const std::string& colormap_name)
-{
-  static const std::unordered_map<std::string, int> colormap_types = {
-    {"JET", cv::COLORMAP_JET},
-    {"HOT", cv::COLORMAP_HOT},
-    {"COOL", cv::COLORMAP_COOL},
-    {"SPRING", cv::COLORMAP_SPRING},
-    {"SUMMER", cv::COLORMAP_SUMMER},
-    {"AUTUMN", cv::COLORMAP_AUTUMN},
-    {"WINTER", cv::COLORMAP_WINTER},
-    {"BONE", cv::COLORMAP_BONE},
-    {"GRAY", cv::COLORMAP_BONE},
-    {"HSV", cv::COLORMAP_HSV},
-    {"PARULA", cv::COLORMAP_PARULA},
-    {"PLASMA", cv::COLORMAP_PLASMA},
-    {"INFERNO", cv::COLORMAP_INFERNO},
-    {"VIRIDIS", cv::COLORMAP_VIRIDIS},
-    {"MAGMA", cv::COLORMAP_MAGMA},
-    {"CIVIDIS", cv::COLORMAP_CIVIDIS}
-  };
-  
-  auto it = colormap_types.find(colormap_name);
-  if (it != colormap_types.end()) {
-    return it->second;
-  }
-  RCLCPP_WARN(get_logger(), "Unknown colormap '%s', using JET as default", colormap_name.c_str());
-  return cv::COLORMAP_JET;
-}
-
-void DepthAnythingV3Node::onImageDebug(const sensor_msgs::msg::Image::ConstSharedPtr & msg)
-{
-  static int image_count = 0;
-  image_count++;
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000, 
-    "[DEBUG] Received image #%d, encoding: %s, size: %ux%u, timestamp: %d.%09d", 
-    image_count, msg->encoding.c_str(), msg->width, msg->height, msg->header.stamp.sec, msg->header.stamp.nanosec);
-}
-
-void DepthAnythingV3Node::onCameraInfoDebug(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg)
-{
-  static int camera_info_count = 0;
-  camera_info_count++;
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-    "[DEBUG] Received camera info #%d, frame: %s, timestamp: %d.%09d", 
-    camera_info_count, msg->header.frame_id.c_str(), msg->header.stamp.sec, msg->header.stamp.nanosec);
 }
 
 } // namespace depth_anything_v3

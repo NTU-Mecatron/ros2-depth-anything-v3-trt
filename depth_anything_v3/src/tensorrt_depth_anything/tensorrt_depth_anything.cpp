@@ -206,6 +206,7 @@ void TensorRTDepthAnything::initPreprocessBuffer(int width, int height)
 bool TensorRTDepthAnything::doInference(
   const std::vector<cv::Mat> & images, 
   const sensor_msgs::msg::CameraInfo & camera_info,
+  bool build_pointcloud,
   int downsample_factor,
   bool colorize_pointcloud)
 {
@@ -230,8 +231,8 @@ bool TensorRTDepthAnything::doInference(
   }
 
   // Postprocess with downsampling
-  cv::Mat rgb_for_pointcloud = colorize_pointcloud ? images[0] : cv::Mat();
-  postprocess(camera_info, downsample_factor, rgb_for_pointcloud);
+  cv::Mat rgb_for_pointcloud = (build_pointcloud && colorize_pointcloud) ? images[0] : cv::Mat();
+  postprocess(camera_info, build_pointcloud, downsample_factor, rgb_for_pointcloud);
   
   return true;
 }
@@ -371,7 +372,8 @@ bool TensorRTDepthAnything::infer()
 }
 
 void TensorRTDepthAnything::postprocess(
-  const sensor_msgs::msg::CameraInfo & camera_info, int downsample_factor, const cv::Mat & rgb_image)
+  const sensor_msgs::msg::CameraInfo & camera_info, bool build_pointcloud, int downsample_factor,
+  const cv::Mat & rgb_image)
 {
   const auto output_dims = trt_common_->getBindingDimensions(1);
   const int height = output_dims.nbDims > 2 ? output_dims.d[2] : input_height_;
@@ -461,7 +463,9 @@ void TensorRTDepthAnything::postprocess(
     cv::resize(colorized, colorized, depth_image_.size(), 0, 0, cv::INTER_LINEAR);
   }
 
-  buildPointCloud(camera_info, downsample_factor, colorized);
+  if (build_pointcloud) {
+    buildPointCloud(camera_info, downsample_factor, colorized);
+  }
 }
 
 

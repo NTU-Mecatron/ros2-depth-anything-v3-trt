@@ -57,18 +57,27 @@ Depending on your driver and CUDA version you need to select the appropriate bas
 
 ### Subscribed Topics
 
-- `~/input/image` (sensor_msgs/msg/Image): Input camera image (supports raw and compressed transport via [image_transport](https://wiki.ros.org/image_transport))
-- `~/input/camera_info` (sensor_msgs/msg/CameraInfo): Camera calibration info
+- Configured by `input_image_topic` and `input_camera_info_topic`
+- The shipped config subscribes to `/camera_rospkg/image_raw` and `/camera_rospkg/camera_info`
 
 ### Published Topics  
 
-- `~/output/depth_image` (sensor_msgs/msg/Image): Depth image (32FC1 format)
-- `~/output/point_cloud` (sensor_msgs/msg/PointCloud2): Generated point cloud
-- `~/output/depth_image_debug` (sensor_msgs/msg/Image): Debug depth visualization (if enabled)
+- `output/depth_image` (sensor_msgs/msg/Image): Default depth image topic relative to the node namespace
+- `output/point_cloud` (sensor_msgs/msg/PointCloud2): Default point cloud topic relative to the node namespace
+- `output/depth_image_debug` (sensor_msgs/msg/Image): Debug depth visualization relative to the node namespace (if enabled)
 
 ## Parameters
 
 All parameters can be configured via `config/depth_anything_v3.param.yaml` or passed at launch time.
+
+### Topic Configuration
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `input_image_topic` | string | required | Input image topic, used exactly as configured |
+| `input_camera_info_topic` | string | required | Input camera info topic, used exactly as configured |
+| `output_depth_topic` | string | `output/depth_image` | Output depth topic; empty string in the YAML uses the built-in default |
+| `output_point_cloud_topic` | string | `output/point_cloud` | Output point cloud topic; empty string in the YAML uses the built-in default |
 
 ### Model Configuration
 
@@ -117,11 +126,10 @@ ros2 launch depth_anything_v3 depth_anything_v3.launch.py
 
 ```bash
 ros2 launch depth_anything_v3 depth_anything_v3.launch.py \
-    input_image_topic:=/your_camera/image_raw \
-    input_camera_info_topic:=/your_camera/camera_info \
-    output_depth_topic:=/depth_anything_v3/depth \
-    output_point_cloud_topic:=/depth_anything_v3/points
+    params_file:=/path/to/your_topics.param.yaml
 ```
+
+Set custom topic names in the parameter file. Use absolute names such as `/my/depth` if you do not want the node namespace prepended. Relative names keep normal ROS namespace resolution.
 
 ### With Debug Enabled
 

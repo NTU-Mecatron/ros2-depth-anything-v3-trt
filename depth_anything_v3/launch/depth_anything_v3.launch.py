@@ -13,70 +13,52 @@
 # limitations under the License.
 
 import os
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
-    # Get package directory
     pkg_dir = get_package_share_directory('depth_anything_v3')
-    
-    # Declare launch arguments
+    params_file = LaunchConfiguration('params_file')
+    namespace = LaunchConfiguration('namespace')
+
     params_file_arg = DeclareLaunchArgument(
         'params_file',
         default_value=os.path.join(pkg_dir, 'config', 'depth_anything_v3.param.yaml'),
         description='Path to the parameter file'
     )
-    
-    input_image_topic_arg = DeclareLaunchArgument(
-        'input_image_topic',
-        default_value='/camera/image_raw',
-        description='Input image topic (supports raw and compressed via image_transport)'
-    )
-    
-    input_camera_info_topic_arg = DeclareLaunchArgument(
-        'input_camera_info_topic',
-        default_value='/camera/camera_info',
-        description='Input camera info topic'
-    )
-    
-    output_depth_topic_arg = DeclareLaunchArgument(
-        'output_depth_topic',
-        default_value='/depth_anything_v3/output/depth_image',
-        description='Output depth image topic'
-    )
-    
-    output_point_cloud_topic_arg = DeclareLaunchArgument(
-        'output_point_cloud_topic',
-        default_value='/depth_anything_v3/output/point_cloud',
-        description='Output point cloud topic'
+
+    namespace_arg = DeclareLaunchArgument(
+        'namespace',
+        default_value='depth_anything_v3',
+        description='Namespace for the Depth Anything V3 component node.'
     )
 
-    # Depth Anything V3 node
-    depth_anything_v3_node = Node(
-        package='depth_anything_v3',
-        executable='depth_anything_v3_main',
-        name='depth_anything_v3',
-        output='screen',
-        remappings=[
-            ('~/input/image', LaunchConfiguration('input_image_topic')),
-            ('~/input/camera_info', LaunchConfiguration('input_camera_info_topic')),
-            ('~/output/depth_image', LaunchConfiguration('output_depth_topic')),
-            ('~/output/point_cloud', LaunchConfiguration('output_point_cloud_topic'))
+    container = ComposableNodeContainer(
+        name='depth_anything_v3_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableNode(
+                package='depth_anything_v3',
+                plugin='depth_anything_v3::DepthAnythingV3Node',
+                name='depth_anything_v3',
+                namespace=namespace,
+                parameters=[params_file],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
         ],
-        parameters=[LaunchConfiguration('params_file')]
+        output='screen',
     )
 
     return LaunchDescription([
-        # Launch arguments
         params_file_arg,
-        input_image_topic_arg,
-        input_camera_info_topic_arg,
-        output_depth_topic_arg,
-        output_point_cloud_topic_arg,
-        # Nodes
-        depth_anything_v3_node,
+        namespace_arg,
+        container,
     ])
