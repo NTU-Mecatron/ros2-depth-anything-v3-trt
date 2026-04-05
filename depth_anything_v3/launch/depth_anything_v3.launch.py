@@ -12,26 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    pkg_dir = get_package_share_directory('depth_anything_v3')
-    params_file = LaunchConfiguration('params_file')
-    namespace = LaunchConfiguration('namespace')
-
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=os.path.join(pkg_dir, 'config', 'depth_anything_v3.param.yaml'),
-        description='Path to the parameter file'
-    )
+    config_file = PathJoinSubstitution([FindPackageShare('depth_anything_v3'), 'config', 'depth_anything_v3.param.yaml'])
 
     namespace_arg = DeclareLaunchArgument(
         'namespace',
@@ -49,8 +39,8 @@ def generate_launch_description():
                 package='depth_anything_v3',
                 plugin='depth_anything_v3::DepthAnythingV3Node',
                 name='depth_anything_v3',
-                namespace=namespace,
-                parameters=[params_file],
+                namespace=LaunchConfiguration('namespace'),
+                parameters=[config_file],
                 extra_arguments=[{'use_intra_process_comms': True}],
             ),
         ],
@@ -58,7 +48,6 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        params_file_arg,
         namespace_arg,
         container,
     ])
