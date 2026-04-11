@@ -20,75 +20,63 @@
 #else
 #include <cv_bridge/cv_bridge.h>
 #endif
+#include <atomic>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/image.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rclcpp_lifecycle/lifecycle_publisher.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <string>
-#include <image_transport/subscriber_filter.hpp>
-#include <message_filters/subscriber.h>
-#include <message_filters/synchronizer.h>
-#include <message_filters/sync_policies/approximate_time.h>
 
 #include "depth_anything_v3/tensorrt_depth_anything.hpp"
 
 namespace depth_anything_v3
 {
-class DepthAnythingV3Node : public rclcpp::Node
+using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
+class DepthAnythingV3Node : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   explicit DepthAnythingV3Node(const rclcpp::NodeOptions & node_options);
 
   struct NodeParam
   {
+    std::string input_image_topic{};
+    std::string input_camera_info_topic{};
+    std::string output_depth_topic{};
+    std::string output_point_cloud_topic{};
     std::string onnx_path{};
     std::string precision{};
-    bool enable_debug{};
-    std::string debug_colormap{};
-    std::string debug_filepath{};
-    bool write_colormap{};
-    double debug_colormap_min_depth{};  // Minimum depth value for colormap visualization
-    double debug_colormap_max_depth{};  // Maximum depth value for colormap visualization
     double sky_threshold{};             // Threshold for sky classification
     double sky_depth_cap{};             // Cap for sky depth fill-in
+    bool publish_point_cloud{};         // Whether to generate and publish point clouds
     int point_cloud_downsample_factor{};  // Only publish every Nth point (1 = no downsampling)
     bool colorize_point_cloud{};  // Add RGB colors from input image to point cloud
   };
 
 private:
-  // Synchronized subscribers for image (via image_transport) and camera_info
-  image_transport::SubscriberFilter sub_image_;
-  std::shared_ptr<message_filters::Subscriber<sensor_msgs::msg::CameraInfo>> sub_camera_info_;
-  
-  // Use approximate time synchronizer for more flexible timing
-  typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image, sensor_msgs::msg::CameraInfo> ApproxSyncPolicy;
-  std::shared_ptr<message_filters::Synchronizer<ApproxSyncPolicy>> sync_;
-  
-  // Debug subscribers (separate from sync)
-  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr debug_image_sub_;
-  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr debug_camera_info_sub_;
+  CallbackReturn on_configure(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State & state) override;
+
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_image_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
 
   // Callbacks
-  void onImageCameraInfo(
-    const sensor_msgs::msg::Image::ConstSharedPtr & image_msg,
-    const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
-    
-  // Debug callbacks for individual topics
-  void onImageDebug(const sensor_msgs::msg::Image::ConstSharedPtr & msg);
-  void onCameraInfoDebug(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg);
+  void onImage(const sensor_msgs::msg::Image::ConstSharedPtr & image_msg);
+  void onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
 
   // Publishers
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_debug_;
-
-  // Helper methods
-  int getColorMapType(const std::string& colormap_name);
+  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
+  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
 
   // Parameter Server
-  OnSetParametersCallbackHandle::SharedPtr set_param_res_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr set_param_res_;
   rcl_interfaces::msg::SetParametersResult onSetParam(
     const std::vector<rclcpp::Parameter> & params);
 
@@ -97,6 +85,7 @@ private:
 
   // Core
   std::shared_ptr<TensorRTDepthAnything> tensorrt_depth_anything_;
+  std::shared_ptr<const sensor_msgs::msg::CameraInfo> latest_camera_info_;
   bool is_initialized_ = false;
 };
 

@@ -12,71 +12,73 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableLifecycleNode
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    # Get package directory
-    pkg_dir = get_package_share_directory('depth_anything_v3')
-    
-    # Declare launch arguments
-    params_file_arg = DeclareLaunchArgument(
-        'params_file',
-        default_value=os.path.join(pkg_dir, 'config', 'depth_anything_v3.param.yaml'),
-        description='Path to the parameter file'
+    config_file = PathJoinSubstitution([FindPackageShare('depth_anything_v3'), 'config', 'depth_anything_v3.param.yaml'])
+
+    namespace_arg = DeclareLaunchArgument(
+        'namespace',
+        default_value='depth_anything_v3',
+        description='Namespace for the Depth Anything V3 component node.'
     )
-    
-    input_image_topic_arg = DeclareLaunchArgument(
-        'input_image_topic',
-        default_value='/camera/image_raw',
-        description='Input image topic (supports raw and compressed via image_transport)'
-    )
-    
-    input_camera_info_topic_arg = DeclareLaunchArgument(
-        'input_camera_info_topic',
-        default_value='/camera/camera_info',
-        description='Input camera info topic'
-    )
-    
-    output_depth_topic_arg = DeclareLaunchArgument(
-        'output_depth_topic',
-        default_value='/depth_anything_v3/output/depth_image',
-        description='Output depth image topic'
-    )
-    
-    output_point_cloud_topic_arg = DeclareLaunchArgument(
-        'output_point_cloud_topic',
-        default_value='/depth_anything_v3/output/point_cloud',
-        description='Output point cloud topic'
+    container = ComposableNodeContainer(
+        name='depth_anything_v3_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        composable_node_descriptions=[
+            ComposableLifecycleNode(
+                package='depth_anything_v3',
+                plugin='depth_anything_v3::DepthAnythingV3Node',
+                name='depth_anything_v3',
+                namespace=LaunchConfiguration('namespace'),
+                parameters=[config_file],
+                extra_arguments=[{'use_intra_process_comms': True}],
+                autostart=False,
+            ),
+        ],
+        output='screen',
     )
 
-    # Depth Anything V3 node
-    depth_anything_v3_node = Node(
-        package='depth_anything_v3',
-        executable='depth_anything_v3_main',
-        name='depth_anything_v3',
-        output='screen',
-        remappings=[
-            ('~/input/image', LaunchConfiguration('input_image_topic')),
-            ('~/input/camera_info', LaunchConfiguration('input_camera_info_topic')),
-            ('~/output/depth_image', LaunchConfiguration('output_depth_topic')),
-            ('~/output/point_cloud', LaunchConfiguration('output_point_cloud_topic'))
-        ],
-        parameters=[LaunchConfiguration('params_file')]
-    )
+    def lifecycle_startup_actions(context):
+        namespace = LaunchConfiguration('namespace').perform(context).strip('/')
+        full_node_name = f'/{namespace}/depth_anything_v3' if namespace else '/depth_anything_v3'
+
+        if LaunchConfiguration('autostart').perform(context).strip().lower() != 'true':
+            return []
+
+        lifecycle_cmd = (
+            f'until ros2 lifecycle set {full_node_name} configure; do '
+            'echo "Waiting for configure service..."; '
+            'sleep 1; '
+            'done; '
+            f'until ros2 lifecycle set {full_node_name} activate; do '
+            'echo "Waiting for activate service..."; '
+            'sleep 1; '
+            'done'
+        )
+
+        return [
+            ExecuteProcess(
+                cmd=['bash', '-lc', lifecycle_cmd],
+                output='screen',
+            ),
+        ]
 
     return LaunchDescription([
-        # Launch arguments
-        params_file_arg,
-        input_image_topic_arg,
-        input_camera_info_topic_arg,
-        output_depth_topic_arg,
-        output_point_cloud_topic_arg,
-        # Nodes
-        depth_anything_v3_node,
+        namespace_arg,
+        DeclareLaunchArgument(
+            'autostart',
+            default_value='true',
+            description="Whether to automatically transition the depth node to 'active' state.",
+        ),
+        container,
+        OpaqueFunction(function=lifecycle_startup_actions),
     ])

@@ -60,10 +60,13 @@ public:
    * @brief run inference including pre-process and post-process
    * @param[in] images batched images
    * @param[in] camera_info camera calibration info for point cloud generation
+   * @param[in] build_pointcloud whether to build point cloud output
    * @param[in] downsample_factor only publish every Nth point (1 = no downsampling)
    * @param[in] colorize_pointcloud whether to colorize point cloud with RGB
    */
-  bool doInference(const std::vector<cv::Mat> & images, const sensor_msgs::msg::CameraInfo & camera_info, int downsample_factor = 1, bool colorize_pointcloud = false);
+  bool doInference(
+    const std::vector<cv::Mat> & images, const sensor_msgs::msg::CameraInfo & camera_info,
+    bool build_pointcloud = true, int downsample_factor = 1, bool colorize_pointcloud = false);
 
   void initPreprocessBuffer(int width, int height);
 
@@ -99,10 +102,13 @@ private:
   /**
    * @brief postprocess inference results to generate depth and point cloud
    * @param[in] camera_info camera calibration for point cloud generation
+   * @param[in] build_pointcloud whether to build point cloud output
    * @param[in] downsample_factor downsampling factor for point cloud
    * @param[in] rgb_image optional RGB image for colorizing point cloud
    */
-  void postprocess(const sensor_msgs::msg::CameraInfo & camera_info, int downsample_factor = 1, const cv::Mat & rgb_image = cv::Mat());
+  void postprocess(
+    const sensor_msgs::msg::CameraInfo & camera_info, bool build_pointcloud = true,
+    int downsample_factor = 1, const cv::Mat & rgb_image = cv::Mat());
 
   /**
    * @brief Build point cloud from depth image using camera intrinsics
@@ -115,6 +121,7 @@ private:
     const cv::Mat & rgb_image);
 public:
   void setSkyThreshold(float threshold) { sky_threshold_ = threshold; }
+  void setSkyDepthCap(float depth_cap) { sky_depth_cap_ = depth_cap; }
 
   std::unique_ptr<tensorrt_common::TrtCommon> trt_common_;
 
@@ -153,7 +160,7 @@ public:
   double scale_x_{1.0};
   double scale_y_{1.0};
   float sky_threshold_{0.3f};
-  const float sky_depth_cap_{200.0f};
+  float sky_depth_cap_{200.0f};
   sensor_msgs::msg::PointCloud2 point_cloud_;
 };
 
