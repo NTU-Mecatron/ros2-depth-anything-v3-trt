@@ -16,8 +16,10 @@
 
 #include <memory>
 #include <string>
+#include <algorithm>
 #include <vector>
 #include <chrono>
+#include <functional>
 #include <stdexcept>
 
 namespace
@@ -42,54 +44,134 @@ bool update_param(
 
 namespace depth_anything_v3
 {
-using namespace std::literals;
-
 DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_options)
-: Node("depth_anything_v3", node_options)
+: rclcpp_lifecycle::LifecycleNode("depth_anything_v3", node_options)
 {
   using std::placeholders::_1;
-  
-  // Parameter
+
   set_param_res_ =
     this->add_on_set_parameters_callback(std::bind(&DepthAnythingV3Node::onSetParam, this, _1));
-  
+
   node_param_.onnx_path = declare_parameter<std::string>(
     "onnx_path", "models/DA3METRIC-LARGE.fp16-batch1.engine");
   node_param_.precision = declare_parameter<std::string>("precision", "fp16");
   node_param_.sky_threshold = declare_parameter<double>("sky_threshold", 0.3);
   node_param_.sky_depth_cap = declare_parameter<double>("sky_depth_cap", 200.0);
   node_param_.input_image_topic = declare_parameter<std::string>("input_image_topic", "");
-  node_param_.input_camera_info_topic =declare_parameter<std::string>("input_camera_info_topic", "");
+  node_param_.input_camera_info_topic = declare_parameter<std::string>("input_camera_info_topic", "");
   node_param_.output_depth_topic = declare_parameter<std::string>("output_depth_topic", "");
   node_param_.output_point_cloud_topic = declare_parameter<std::string>("output_point_cloud_topic", "");
+  node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
+  node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
+  node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Depth Anything V3 lifecycle node constructed; awaiting configure transition");
+}
+
+CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &)
+{
+  get_parameter("onnx_path", node_param_.onnx_path);
+  get_parameter("precision", node_param_.precision);
+  get_parameter("sky_threshold", node_param_.sky_threshold);
+  get_parameter("sky_depth_cap", node_param_.sky_depth_cap);
+  get_parameter("input_image_topic", node_param_.input_image_topic);
+  get_parameter("input_camera_info_topic", node_param_.input_camera_info_topic);
+  get_parameter("output_depth_topic", node_param_.output_depth_topic);
+  get_parameter("output_point_cloud_topic", node_param_.output_point_cloud_topic);
+  get_parameter("publish_point_cloud", node_param_.publish_point_cloud);
+  get_parameter("point_cloud_downsample_factor", node_param_.point_cloud_downsample_factor);
+  get_parameter("colorize_point_cloud", node_param_.colorize_point_cloud);
+
   if (node_param_.input_image_topic.empty() || node_param_.input_camera_info_topic.empty()) {
-    throw std::runtime_error(
+    RCLCPP_ERROR(
+      get_logger(),
       "Input topic parameters 'input_image_topic' and 'input_camera_info_topic' must be non-empty.");
+    return CallbackReturn::FAILURE;
   }
+
   if (node_param_.output_depth_topic.empty()) {
     node_param_.output_depth_topic = "output/depth_image";
   }
   if (node_param_.output_point_cloud_topic.empty()) {
     node_param_.output_point_cloud_topic = "output/point_cloud";
   }
-  
-  // Point cloud parameters
-  node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
-  node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
-  node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
   if (node_param_.point_cloud_downsample_factor < 1) {
-    throw std::runtime_error(
-      "Parameter 'point_cloud_downsample_factor' must be >= 1.");
+    RCLCPP_ERROR(get_logger(), "Parameter 'point_cloud_downsample_factor' must be >= 1.");
+    return CallbackReturn::FAILURE;
   }
+
+  sub_image_.reset();
+  sub_camera_info_.reset();
+  pub_depth_image_.reset();
+  pub_point_cloud_.reset();
+  tensorrt_depth_anything_.reset();
+  std::atomic_store(&latest_camera_info_, std::shared_ptr<const sensor_msgs::msg::CameraInfo>{});
+  is_initialized_ = false;
+
+  RCLCPP_INFO(get_logger(), "Using model file: %s", node_param_.onnx_path.c_str());
   RCLCPP_INFO(
     get_logger(), "Point cloud publishing: %s",
     node_param_.publish_point_cloud ? "enabled" : "disabled");
-  RCLCPP_INFO(get_logger(), "Point cloud downsampling factor: %d (publishing every %dth point)", 
+  RCLCPP_INFO(
+    get_logger(), "Point cloud downsampling factor: %d (publishing every %dth point)",
     node_param_.point_cloud_downsample_factor, node_param_.point_cloud_downsample_factor);
 
-  RCLCPP_INFO(get_logger(), "Using model file: %s", node_param_.onnx_path.c_str());
+  try {
+    std::string calib_type = "MinMax";
+    int dla = -1;
+    bool first = false;
+    bool last = false;
+    bool prof = false;
+    double clip = 0.0;
+    tensorrt_common::BuildConfig build_config(calib_type, dla, first, last, prof, clip);
 
-  // Create subscriptions
+    int batch = 1;
+    tensorrt_common::BatchConfig batch_config{1, batch / 2, batch};
+
+    bool use_gpu_preprocess = false;
+    std::string calibration_images = "calibration_images.txt";
+    const size_t workspace_size = (1 << 30);
+
+    tensorrt_depth_anything_ = std::make_shared<TensorRTDepthAnything>(
+      node_param_.onnx_path, node_param_.precision, build_config, use_gpu_preprocess,
+      calibration_images, batch_config, workspace_size);
+    tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(node_param_.sky_threshold));
+    tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(node_param_.sky_depth_cap));
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Failed to configure TensorRT model: %s", e.what());
+    tensorrt_depth_anything_.reset();
+    return CallbackReturn::FAILURE;
+  }
+
+  pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(
+    node_param_.output_depth_topic, rclcpp::QoS(1));
+  pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+    node_param_.output_point_cloud_topic, rclcpp::QoS(1));
+
+  RCLCPP_INFO(get_logger(), "Configured Depth Anything V3 lifecycle node");
+  RCLCPP_INFO(get_logger(), "  - Image topic: %s", node_param_.input_image_topic.c_str());
+  RCLCPP_INFO(
+    get_logger(), "  - Camera info topic: %s", node_param_.input_camera_info_topic.c_str());
+  RCLCPP_INFO(get_logger(), "  - Depth output topic: %s", node_param_.output_depth_topic.c_str());
+  RCLCPP_INFO(
+    get_logger(), "  - Point cloud output topic: %s",
+    node_param_.output_point_cloud_topic.c_str());
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn DepthAnythingV3Node::on_activate(const rclcpp_lifecycle::State &)
+{
+  using std::placeholders::_1;
+
+  if (pub_depth_image_) {
+    pub_depth_image_->on_activate();
+  }
+  if (pub_point_cloud_) {
+    pub_point_cloud_->on_activate();
+  }
+
   sub_image_ = this->create_subscription<sensor_msgs::msg::Image>(
     node_param_.input_image_topic, rclcpp::SensorDataQoS(),
     std::bind(&DepthAnythingV3Node::onImage, this, _1));
@@ -97,44 +179,65 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
     node_param_.input_camera_info_topic, rclcpp::SensorDataQoS(),
     std::bind(&DepthAnythingV3Node::onCameraInfo, this, _1));
 
-  RCLCPP_INFO(get_logger(), "Depth Anything V3 TensorRT node initialized successfully");
-  RCLCPP_INFO(get_logger(), "Waiting for input messages on:");
-  RCLCPP_INFO(get_logger(), "  - Image topic: %s", node_param_.input_image_topic.c_str());
-  RCLCPP_INFO(get_logger(), "  - Camera info topic: %s", node_param_.input_camera_info_topic.c_str());
+  RCLCPP_INFO(get_logger(), "Activated Depth Anything V3 lifecycle node");
+  return CallbackReturn::SUCCESS;
+}
 
-  // Publishers
-  pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(node_param_.output_depth_topic, 1);
-  pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(node_param_.output_point_cloud_topic, 1);
-  RCLCPP_INFO(get_logger(), "Publishing depth image on: %s", node_param_.output_depth_topic.c_str());
-  RCLCPP_INFO(get_logger(), "Publishing point cloud on: %s", node_param_.output_point_cloud_topic.c_str());
+CallbackReturn DepthAnythingV3Node::on_deactivate(const rclcpp_lifecycle::State &)
+{
+  sub_image_.reset();
+  sub_camera_info_.reset();
+  std::atomic_store(&latest_camera_info_, std::shared_ptr<const sensor_msgs::msg::CameraInfo>{});
+  is_initialized_ = false;
 
-  // Init TensorRT model
-  std::string calibType = "MinMax";
-  int dla = -1;
-  bool first = false;
-  bool last = false;
-  bool prof = false;
-  double clip = 0.0;
-  tensorrt_common::BuildConfig build_config(calibType, dla, first, last, prof, clip);
+  if (pub_depth_image_) {
+    pub_depth_image_->on_deactivate();
+  }
+  if (pub_point_cloud_) {
+    pub_point_cloud_->on_deactivate();
+  }
 
-  int batch = 1;
-  tensorrt_common::BatchConfig batch_config{1, batch / 2, batch};
+  RCLCPP_INFO(get_logger(), "Deactivated Depth Anything V3 lifecycle node");
+  return CallbackReturn::SUCCESS;
+}
 
-  bool use_gpu_preprocess = false;
-  std::string calibration_images = "calibration_images.txt";
-  const size_t workspace_size = (1 << 30);
+CallbackReturn DepthAnythingV3Node::on_cleanup(const rclcpp_lifecycle::State &)
+{
+  sub_image_.reset();
+  sub_camera_info_.reset();
+  pub_depth_image_.reset();
+  pub_point_cloud_.reset();
+  tensorrt_depth_anything_.reset();
+  std::atomic_store(&latest_camera_info_, std::shared_ptr<const sensor_msgs::msg::CameraInfo>{});
+  is_initialized_ = false;
 
-  tensorrt_depth_anything_ = std::make_shared<TensorRTDepthAnything>(
-    node_param_.onnx_path, node_param_.precision, build_config, use_gpu_preprocess,
-    calibration_images, batch_config, workspace_size);
-  tensorrt_depth_anything_->setSkyThreshold(static_cast<float>(node_param_.sky_threshold));
-  tensorrt_depth_anything_->setSkyDepthCap(static_cast<float>(node_param_.sky_depth_cap));
-    
-  RCLCPP_INFO(get_logger(), "Finished initializing Depth Anything V3 TensorRT model");
+  RCLCPP_INFO(get_logger(), "Cleaned up Depth Anything V3 lifecycle node");
+  return CallbackReturn::SUCCESS;
+}
+
+CallbackReturn DepthAnythingV3Node::on_shutdown(const rclcpp_lifecycle::State &)
+{
+  sub_image_.reset();
+  sub_camera_info_.reset();
+  pub_depth_image_.reset();
+  pub_point_cloud_.reset();
+  tensorrt_depth_anything_.reset();
+  std::atomic_store(&latest_camera_info_, std::shared_ptr<const sensor_msgs::msg::CameraInfo>{});
+  is_initialized_ = false;
+
+  RCLCPP_INFO(get_logger(), "Shut down Depth Anything V3 lifecycle node");
+  return CallbackReturn::SUCCESS;
 }
 
 void DepthAnythingV3Node::onImage(const sensor_msgs::msg::Image::ConstSharedPtr & image_msg)
 {
+  if (!tensorrt_depth_anything_ || !pub_depth_image_ || !pub_point_cloud_) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 2000,
+      "Skipping image because lifecycle resources are not configured");
+    return;
+  }
+
   const auto camera_info_msg = std::atomic_load(&latest_camera_info_);
   if (!camera_info_msg) {
     RCLCPP_WARN_THROTTLE(
@@ -212,11 +315,13 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
       const auto & name = param.get_name();
       if (
         (name == "input_image_topic" || name == "input_camera_info_topic" ||
-        name == "output_depth_topic" || name == "output_point_cloud_topic") &&
-        (sub_image_ || sub_camera_info_ || pub_depth_image_ || pub_point_cloud_))
+        name == "output_depth_topic" || name == "output_point_cloud_topic" ||
+        name == "onnx_path" || name == "precision") &&
+        (tensorrt_depth_anything_ || pub_depth_image_ || pub_point_cloud_))
       {
         result.successful = false;
-        result.reason = "Topic parameters are startup-only and cannot be changed at runtime.";
+        result.reason =
+          "Input/output topics, onnx_path, and precision are configure-time-only parameters.";
         return result;
       }
 

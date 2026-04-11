@@ -20,9 +20,12 @@
 #else
 #include <cv_bridge/cv_bridge.h>
 #endif
+#include <atomic>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp_lifecycle/lifecycle_node.hpp>
+#include <rclcpp_lifecycle/lifecycle_publisher.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
@@ -32,7 +35,9 @@
 
 namespace depth_anything_v3
 {
-class DepthAnythingV3Node : public rclcpp::Node
+using CallbackReturn = rclcpp_lifecycle::node_interfaces::LifecycleNodeInterface::CallbackReturn;
+
+class DepthAnythingV3Node : public rclcpp_lifecycle::LifecycleNode
 {
 public:
   explicit DepthAnythingV3Node(const rclcpp::NodeOptions & node_options);
@@ -53,6 +58,12 @@ public:
   };
 
 private:
+  CallbackReturn on_configure(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_activate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_deactivate(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_cleanup(const rclcpp_lifecycle::State & state) override;
+  CallbackReturn on_shutdown(const rclcpp_lifecycle::State & state) override;
+
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_image_;
   rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
 
@@ -61,11 +72,11 @@ private:
   void onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
 
   // Publishers
-  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
-  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
+  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
+  rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
 
   // Parameter Server
-  OnSetParametersCallbackHandle::SharedPtr set_param_res_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr set_param_res_;
   rcl_interfaces::msg::SetParametersResult onSetParam(
     const std::vector<rclcpp::Parameter> & params);
 
