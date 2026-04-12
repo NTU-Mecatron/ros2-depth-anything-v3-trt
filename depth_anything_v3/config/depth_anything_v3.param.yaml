@@ -1,12 +1,5 @@
 /**/depth_anything_v3:
   ros__parameters:
-    input_image_topic: "/camera_rospkg/image_raw"
-    input_camera_info_topic: "/camera_rospkg/camera_info"
-
-    # Leave output topics empty to use the built-in defaults under the node namespace.
-    output_depth_topic: ""
-    output_point_cloud_topic: ""
-
     # Model configuration
     onnx_path: "src/perception/ros2-depth-anything-v3-trt/depth_anything_v3/models/DA3METRIC-LARGE.fp16-batch1.engine"
     precision: "fp16"                # fp16 or fp32

@@ -206,7 +206,7 @@ void TrtCommon::setup()
   if (build_config_->profile_per_layer) {
     context_->setProfiler(&model_profiler_);
   }
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8200
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8200
   // Write profiles for trt-engine-explorer
   // See: https://github.com/NVIDIA/TensorRT/tree/main/tools/experimental/trt-engine-explorer
   std::string j_ext = ".json";
@@ -255,7 +255,7 @@ void TrtCommon::printNetworkInfo(const std::string & onnx_file_path)
   if (precision_ == "fp16" || precision_ == "int8") {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
   }
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8400
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8400
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, max_workspace_size_);
 #else
   config->setMaxWorkspaceSize(max_workspace_size_);
@@ -364,7 +364,7 @@ bool TrtCommon::buildEngineFromOnnx(
     }
     config->setDefaultDeviceType(nvinfer1::DeviceType::kDLA);
     config->setDLACore(build_config_->dla_core_id);
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8200
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8200
     config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
 #else
     config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES);
@@ -374,7 +374,7 @@ bool TrtCommon::buildEngineFromOnnx(
   if (precision_ == "fp16" || precision_ == "int8") {
     config->setFlag(nvinfer1::BuilderFlag::kFP16);
   }
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8400
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8400
   config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, max_workspace_size_);
 #else
   config->setMaxWorkspaceSize(max_workspace_size_);
@@ -466,7 +466,7 @@ bool TrtCommon::buildEngineFromOnnx(
   }
   if (precision_ == "int8" && calibrator_) {
     config->setFlag(nvinfer1::BuilderFlag::kINT8);
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8200
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8200
     config->setFlag(nvinfer1::BuilderFlag::kPREFER_PRECISION_CONSTRAINTS);
 #else
     config->setFlag(nvinfer1::BuilderFlag::kSTRICT_TYPES);
@@ -476,14 +476,14 @@ bool TrtCommon::buildEngineFromOnnx(
     config->setInt8Calibrator(calibrator_.get());
   }
   if (build_config_->profile_per_layer) {
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8200
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8200
     config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kDETAILED);
 #else
     config->setProfilingVerbosity(nvinfer1::ProfilingVerbosity::kVERBOSE);
 #endif
   }
 
-#if TENSORRT_VERSION_MAJOR >= 8
+#if NV_TENSORRT_MAJOR >= 8
   auto plan =
     TrtUniquePtr<nvinfer1::IHostMemory>(builder->buildSerializedNetwork(*network, *config));
   if (!plan) {
@@ -502,7 +502,7 @@ bool TrtCommon::buildEngineFromOnnx(
   }
 
   // save engine
-#if TENSORRT_VERSION_MAJOR < 8
+#if NV_TENSORRT_MAJOR < 8
   auto data = TrtUniquePtr<nvinfer1::IHostMemory>(engine_->serialize());
 #endif
   std::ofstream file;
@@ -510,7 +510,7 @@ bool TrtCommon::buildEngineFromOnnx(
   if (!file.is_open()) {
     return false;
   }
-#if TENSORRT_VERSION_MAJOR < 8
+#if NV_TENSORRT_MAJOR < 8
   file.write(reinterpret_cast<const char *>(data->data()), data->size());
 #else
   file.write(reinterpret_cast<const char *>(plan->data()), plan->size());
@@ -561,7 +561,7 @@ void TrtCommon::printProfiling()
   std::cout << model_profiler_;
 }
 
-#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSOR_PATCH >= 8200
+#if (NV_TENSORRT_MAJOR * 1000) + (NV_TENSORRT_MINOR * 100) + NV_TENSORRT_PATCH >= 8200
 std::string TrtCommon::getLayerInformation(nvinfer1::LayerInformationFormat format)
 {
   auto runtime = std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(logger_));

@@ -44,10 +44,6 @@ public:
 
   struct NodeParam
   {
-    std::string input_image_topic{};
-    std::string input_camera_info_topic{};
-    std::string output_depth_topic{};
-    std::string output_point_cloud_topic{};
     std::string onnx_path{};
     std::string precision{};
     double sky_threshold{};             // Threshold for sky classification

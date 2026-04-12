@@ -57,27 +57,20 @@ Depending on your driver and CUDA version you need to select the appropriate bas
 
 ### Subscribed Topics
 
-- Configured by `input_image_topic` and `input_camera_info_topic`
-- The shipped config subscribes to `/camera_rospkg/image_raw` and `/camera_rospkg/camera_info`
+- `image/raw` (sensor_msgs/msg/Image): Input RGB image topic
+- `camera_info` (sensor_msgs/msg/CameraInfo): Input camera calibration topic
+
+These are fixed relative topic names. Change them with ROS remapping, not parameters.
 
 ### Published Topics  
 
-- `output/depth_image` (sensor_msgs/msg/Image): Default depth image topic relative to the node namespace
-- `output/point_cloud` (sensor_msgs/msg/PointCloud2): Default point cloud topic relative to the node namespace
+- `depth_image/raw` (sensor_msgs/msg/Image): Raw metric depth image topic relative to the node namespace
+- `point_cloud` (sensor_msgs/msg/PointCloud2): Point cloud topic relative to the node namespace
 - `output/depth_image_debug` (sensor_msgs/msg/Image): Debug depth visualization relative to the node namespace (if enabled)
 
 ## Parameters
 
-All parameters can be configured via `config/depth_anything_v3.param.yaml` or passed at launch time.
-
-### Topic Configuration
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `input_image_topic` | string | required | Input image topic, used exactly as configured |
-| `input_camera_info_topic` | string | required | Input camera info topic, used exactly as configured |
-| `output_depth_topic` | string | `output/depth_image` | Output depth topic; empty string in the YAML uses the built-in default |
-| `output_point_cloud_topic` | string | `output/point_cloud` | Output point cloud topic; empty string in the YAML uses the built-in default |
+Model and runtime parameters can be configured via `config/depth_anything_v3.param.yaml` or passed at launch time. Topic names are not parameters; use ROS remapping.
 
 ### Model Configuration
 
@@ -124,19 +117,18 @@ ros2 launch depth_anything_v3 depth_anything_v3.launch.py
 
 ### With Custom Topics
 
-```bash
-ros2 launch depth_anything_v3 depth_anything_v3.launch.py \
-    params_file:=/path/to/your_topics.param.yaml
-```
+Apply remappings where the component is loaded, for example in your bringup package. The node uses fixed relative topic names:
 
-Set custom topic names in the parameter file. Use absolute names such as `/my/depth` if you do not want the node namespace prepended. Relative names keep normal ROS namespace resolution.
+- `image/raw`
+- `camera_info`
+- `depth_image/raw`
+- `point_cloud`
+
+Use standard ROS remapping rules in the parent launch/container if those interfaces need different names.
 
 ### With Debug Enabled
 
-```bash
-ros2 launch depth_anything_v3 depth_anything_v3.launch.py \
-    params_file:=src/depth_anything_v3/config/debug.param.yaml
-```
+Set the debug-related parameters in your parameter file before launching the component, for example in your bringup package or by editing `config/depth_anything_v3.param.yaml`.
 
 ## Model Preparation
 
