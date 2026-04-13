@@ -54,9 +54,6 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
 {
   using std::placeholders::_1;
 
-  set_param_res_ =
-    this->add_on_set_parameters_callback(std::bind(&DepthAnythingV3Node::onSetParam, this, _1));
-
   node_param_.onnx_path = declare_parameter<std::string>(
     "onnx_path", "models/DA3METRIC-LARGE.fp16-batch1.engine");
   node_param_.precision = declare_parameter<std::string>("precision", "fp16");
@@ -65,6 +62,9 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
+
+  set_param_res_ =
+    this->add_on_set_parameters_callback(std::bind(&DepthAnythingV3Node::onSetParam, this, _1));
 
   RCLCPP_INFO(
     get_logger(),
