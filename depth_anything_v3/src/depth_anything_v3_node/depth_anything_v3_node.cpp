@@ -24,6 +24,11 @@
 
 namespace
 {
+constexpr char kInputImageTopic[] = "image/raw";
+constexpr char kInputCameraInfoTopic[] = "camera_info";
+constexpr char kOutputDepthTopic[] = "depth_image/raw";
+constexpr char kOutputPointCloudTopic[] = "point_cloud";
+
 template <class T>
 bool update_param(
   const std::vector<rclcpp::Parameter> & params, const std::string & name, T & value)
@@ -49,21 +54,17 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
 {
   using std::placeholders::_1;
 
-  set_param_res_ =
-    this->add_on_set_parameters_callback(std::bind(&DepthAnythingV3Node::onSetParam, this, _1));
-
   node_param_.onnx_path = declare_parameter<std::string>(
     "onnx_path", "models/DA3METRIC-LARGE.fp16-batch1.engine");
   node_param_.precision = declare_parameter<std::string>("precision", "fp16");
   node_param_.sky_threshold = declare_parameter<double>("sky_threshold", 0.3);
   node_param_.sky_depth_cap = declare_parameter<double>("sky_depth_cap", 200.0);
-  node_param_.input_image_topic = declare_parameter<std::string>("input_image_topic", "");
-  node_param_.input_camera_info_topic = declare_parameter<std::string>("input_camera_info_topic", "");
-  node_param_.output_depth_topic = declare_parameter<std::string>("output_depth_topic", "");
-  node_param_.output_point_cloud_topic = declare_parameter<std::string>("output_point_cloud_topic", "");
   node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
+
+  set_param_res_ =
+    this->add_on_set_parameters_callback(std::bind(&DepthAnythingV3Node::onSetParam, this, _1));
 
   RCLCPP_INFO(
     get_logger(),
@@ -76,27 +77,10 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
   get_parameter("precision", node_param_.precision);
   get_parameter("sky_threshold", node_param_.sky_threshold);
   get_parameter("sky_depth_cap", node_param_.sky_depth_cap);
-  get_parameter("input_image_topic", node_param_.input_image_topic);
-  get_parameter("input_camera_info_topic", node_param_.input_camera_info_topic);
-  get_parameter("output_depth_topic", node_param_.output_depth_topic);
-  get_parameter("output_point_cloud_topic", node_param_.output_point_cloud_topic);
   get_parameter("publish_point_cloud", node_param_.publish_point_cloud);
   get_parameter("point_cloud_downsample_factor", node_param_.point_cloud_downsample_factor);
   get_parameter("colorize_point_cloud", node_param_.colorize_point_cloud);
 
-  if (node_param_.input_image_topic.empty() || node_param_.input_camera_info_topic.empty()) {
-    RCLCPP_ERROR(
-      get_logger(),
-      "Input topic parameters 'input_image_topic' and 'input_camera_info_topic' must be non-empty.");
-    return CallbackReturn::FAILURE;
-  }
-
-  if (node_param_.output_depth_topic.empty()) {
-    node_param_.output_depth_topic = "output/depth_image";
-  }
-  if (node_param_.output_point_cloud_topic.empty()) {
-    node_param_.output_point_cloud_topic = "output/point_cloud";
-  }
   if (node_param_.point_cloud_downsample_factor < 1) {
     RCLCPP_ERROR(get_logger(), "Parameter 'point_cloud_downsample_factor' must be >= 1.");
     return CallbackReturn::FAILURE;
@@ -146,18 +130,20 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
   }
 
   pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(
-    node_param_.output_depth_topic, rclcpp::QoS(1));
+    kOutputDepthTopic, rclcpp::QoS(1));
   pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
-    node_param_.output_point_cloud_topic, rclcpp::QoS(1));
+    kOutputPointCloudTopic, rclcpp::QoS(1));
 
   RCLCPP_INFO(get_logger(), "Configured Depth Anything V3 lifecycle node");
-  RCLCPP_INFO(get_logger(), "  - Image topic: %s", node_param_.input_image_topic.c_str());
-  RCLCPP_INFO(
-    get_logger(), "  - Camera info topic: %s", node_param_.input_camera_info_topic.c_str());
-  RCLCPP_INFO(get_logger(), "  - Depth output topic: %s", node_param_.output_depth_topic.c_str());
+  RCLCPP_INFO(get_logger(), "  - Image topic: %s", kInputImageTopic);
+  RCLCPP_INFO(get_logger(), "  - Camera info topic: %s", kInputCameraInfoTopic);
+  RCLCPP_INFO(get_logger(), "  - Depth output topic: %s", kOutputDepthTopic);
   RCLCPP_INFO(
     get_logger(), "  - Point cloud output topic: %s",
-    node_param_.output_point_cloud_topic.c_str());
+    kOutputPointCloudTopic);
+  RCLCPP_INFO(
+    get_logger(),
+    "  - Use standard ROS remapping rules to change topic names");
   return CallbackReturn::SUCCESS;
 }
 
@@ -173,10 +159,10 @@ CallbackReturn DepthAnythingV3Node::on_activate(const rclcpp_lifecycle::State &)
   }
 
   sub_image_ = this->create_subscription<sensor_msgs::msg::Image>(
-    node_param_.input_image_topic, rclcpp::SensorDataQoS(),
+    kInputImageTopic, rclcpp::SensorDataQoS(),
     std::bind(&DepthAnythingV3Node::onImage, this, _1));
   sub_camera_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-    node_param_.input_camera_info_topic, rclcpp::SensorDataQoS(),
+    kInputCameraInfoTopic, rclcpp::SensorDataQoS(),
     std::bind(&DepthAnythingV3Node::onCameraInfo, this, _1));
 
   RCLCPP_INFO(get_logger(), "Activated Depth Anything V3 lifecycle node");
@@ -314,14 +300,12 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
     for (const auto & param : params) {
       const auto & name = param.get_name();
       if (
-        (name == "input_image_topic" || name == "input_camera_info_topic" ||
-        name == "output_depth_topic" || name == "output_point_cloud_topic" ||
-        name == "onnx_path" || name == "precision") &&
+        (name == "onnx_path" || name == "precision") &&
         (tensorrt_depth_anything_ || pub_depth_image_ || pub_point_cloud_))
       {
         result.successful = false;
         result.reason =
-          "Input/output topics, onnx_path, and precision are configure-time-only parameters.";
+          "onnx_path and precision are configure-time-only parameters.";
         return result;
       }
 

@@ -28,6 +28,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV 4 REQUIRED)
@@ -97,25 +98,13 @@ target_link_libraries(depth_anything_v3_node
 ament_target_dependencies(depth_anything_v3_node
   rclcpp
   rclcpp_components
+  rclcpp_lifecycle
   sensor_msgs
   cv_bridge
 )
 
 # Register component
 rclcpp_components_register_nodes(depth_anything_v3_node "depth_anything_v3::DepthAnythingV3Node")
-
-# Create executable
-add_executable(depth_anything_v3_main
-  src/main.cpp
-)
-
-target_link_libraries(depth_anything_v3_main
-  depth_anything_v3_node
-)
-
-ament_target_dependencies(depth_anything_v3_main
-  rclcpp
-)
 
 # Create generate_engines executable
 add_executable(generate_engines
@@ -146,7 +135,6 @@ target_link_libraries(generate_engines
 install(TARGETS
   tensorrt_depth_anything
   depth_anything_v3_node
-  depth_anything_v3_main
   generate_engines
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -168,4 +156,5 @@ endif()
 
 ament_export_libraries(tensorrt_depth_anything depth_anything_v3_node)
 ament_export_include_directories(include)
+ament_export_dependencies(rclcpp rclcpp_components rclcpp_lifecycle sensor_msgs cv_bridge)
 ament_package()
