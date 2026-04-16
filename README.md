@@ -9,14 +9,9 @@ A ROS 2 node for Depth Anything V3 depth estimation using TensorRT for real-time
 <!-- omit from toc -->
 ## Overview
 - [Features](#features)
-- [Dependencies](#dependencies)
 - [Topics](#topics)
 - [Parameters](#parameters)
 - [Usage](#usage)
-- [Model Preparation](#model-preparation)
-- [Docker Image](#docker-image)
-- [Building](#building)
-- [Performance](#performance)
 - [Architecture](#architecture)
 - [Depth Postprocessing Pipeline](#depth-postprocessing-pipeline)
 - [Troubleshooting](#troubleshooting)
@@ -24,7 +19,7 @@ A ROS 2 node for Depth Anything V3 depth estimation using TensorRT for real-time
 - [Citation](#citation)
 - [Acknowledgements](#acknowledgements)
 
-
+Proceed to the [Usage](#usage) section for quick start instructions, or read through the detailed documentation below for in-depth information on configuration and troubleshooting.
 
 ## Features
 
@@ -39,20 +34,6 @@ A ROS 2 node for Depth Anything V3 depth estimation using TensorRT for real-time
 > If you would like to learn more about how we can support your automated driving or robotics efforts, feel free to reach out to us!  
 > :email: ***opensource@ika.rwth-aachen.de***
 
-
-## Dependencies
-- Tested with image `nvcr.io/nvidia/tensorrt:25.08-py3`
-  - Ubuntu 24.04, ROS 2 Jazzy
-  - CUDA 13
-  - TensorRT 10.9
-  
-- Tested with image `nvcr.io/nvidia/tensorrt:25.03-py3`
-  - Ubuntu 24.04, ROS 2 Jazzy
-  - CUDA 12.8.1
-  - TensorRT 10.9
-
-Depending on your driver and CUDA version you need to select the appropriate base image.
-
 ## Topics
 
 ### Subscribed Topics
@@ -66,7 +47,6 @@ These are fixed relative topic names. Change them with ROS remapping, not parame
 
 - `depth_image/raw` (sensor_msgs/msg/Image): Raw metric depth image topic relative to the node namespace
 - `point_cloud` (sensor_msgs/msg/PointCloud2): Point cloud topic relative to the node namespace
-- `output/depth_image_debug` (sensor_msgs/msg/Image): Debug depth visualization relative to the node namespace (if enabled)
 
 ## Parameters
 
@@ -90,32 +70,27 @@ Model and runtime parameters can be configured via `config/depth_anything_v3.par
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `publish_point_cloud` | bool | `true` | Whether to publish the point cloud output |
 | `point_cloud_downsample_factor` | int | `2` | Publish every Nth point (1 = full resolution, 10 = every 10th point) |
 | `colorize_point_cloud` | bool | `true` | Add RGB colors from input image to point cloud |
 
-### Debug Configuration
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enable_debug` | bool | `false` | Enable debug visualization output |
-| `debug_colormap` | string | `"JET"` | Colormap for depth visualization (see below) |
-| `debug_filepath` | string | `"/tmp/depth_anything_v3_debug/"` | Directory to save debug images |
-| `write_colormap` | bool | `false` | Save colorized debug images to disk |
-| `debug_colormap_min_depth` | double | `0.0` | Minimum depth value for colormap normalization (meters) |
-| `debug_colormap_max_depth` | double | `50.0` | Maximum depth value for colormap normalization (meters) |
-
-#### Available Colormaps
-`JET`, `HOT`, `COOL`, `SPRING`, `SUMMER`, `AUTUMN`, `WINTER`, `BONE`, `GRAY`, `HSV`, `PARULA`, `PLASMA`, `INFERNO`, `VIRIDIS`, `MAGMA`, `CIVIDIS`
-
 ## Usage
 
-### Basic Launch
+#### Model Preparation
+
+1. Download the ONNX file from Huggingface: [https://huggingface.co/TillBeemelmanns/Depth-Anything-V3-ONNX](https://huggingface.co/TillBeemelmanns/Depth-Anything-V3-ONNX)
+2. Place the ONNX/engine file in the `models/` directory
+3. Update `config/depth_anything_v3.param.yaml` with the correct *ONNX path*
+4. Build the package, followed by building the engine for the first time: `ros2 launch depth_anything_v3 depth_anything_v3.launch.py`
+5. After this initial run, the TensorRT engine will be created. Update the `onnx_path` parameter to point to the generated engine file for faster subsequent launches.
+
+#### Subsequent Launch
 
 ```bash
 ros2 launch depth_anything_v3 depth_anything_v3.launch.py
 ```
 
-### With Custom Topics
+#### With Custom Topics
 
 Apply remappings where the component is loaded, for example in your bringup package. The node uses fixed relative topic names:
 
@@ -126,66 +101,13 @@ Apply remappings where the component is loaded, for example in your bringup pack
 
 Use standard ROS remapping rules in the parent launch/container if those interfaces need different names.
 
-### With Debug Enabled
-
-Set the debug-related parameters in your parameter file before launching the component, for example in your bringup package or by editing `config/depth_anything_v3.param.yaml`.
-
-## Model Preparation
-
-1. **Obtain the ONNX model (Two Options)**:
-   A.  Download the ONNX file from Huggingface: [https://huggingface.co/TillBeemelmanns/Depth-Anything-V3-ONNX](https://huggingface.co/TillBeemelmanns/Depth-Anything-V3-ONNX)
-   B.  Generate ONNX following the instruction [here](onnx/README.md)
-2. **Place model file**: Put the ONNX/engine file in the `models/` directory
-3. **Update configuration**: Modify `config/depth_anything_v3.param.yaml` with the correct model path
-
-Expected model input format:
-- Input shape: [1, 3, 280, 504] (batch, channels, height, width)
-- Input type: float32
-- Value range: [0, 1] (normalized with ImageNet mean/std)
-
-Expected model outputs:
-- `depth`: [1, 1, 280, 504] - metric depth map (float32)
-- `sky`: [1, 1, 280, 504] - sky classification logits (float32, lower values = sky)
-
-
-## Docker Image
-We precompile and provide a Docker image with all dependencies installed and ready 
-to use. You can pull it from Docker Hub:
-```bash
-docker pull tillbeemelmanns/ros2-depth-anything-v3:latest-dev
-```
-
-If you want to run rosbags and visualize the output in rviz2 make sure to install  it
-```bash
-apt update && apt install -y \
-ros-jazzy-rviz2 \
-ros-jazzy-rosbag2 \
-ros-jazzy-rosbag2-storage-mcap
-```
-
-We recommend to use the docker image in combination with our other tools for Docker and ROS.
-- [*docker-ros*](https://github.com/ika-rwth-aachen/docker-ros) automatically builds minimal container images of ROS applications <a href="https://github.com/ika-rwth-aachen/docker-ros"><img src="https://img.shields.io/github/stars/ika-rwth-aachen/docker-ros?style=social"/></a>
-- [*docker-run*](https://github.com/ika-rwth-aachen/docker-run) is a CLI tool for simplified interaction with Docker images <a href="https://github.com/ika-rwth-aachen/docker-run"><img src="https://img.shields.io/github/stars/ika-rwth-aachen/docker-run?style=social"/></a>
-
-
-
-## Building
-
-```bash
-# From your ROS 2 workspace
-colcon build --packages-select depth_anything_v3 --cmake-args -DCMAKE_BUILD_TYPE=Release
-
-source install/setup.bash
-
-# Optional: Pre-build TensorRT engines
-./generate_engines.sh
-```
-
-## Performance
+#### Performance
 The node is optimized for real-time performance.
 
-Performance on Quadro RTX 6000:
-- **DA3METRIC-LARGE**: 50 FPS
+Performance for DA3METRIC-LARGE:
+- **Quadro RTX 6000**: 50 FPS
+- **RTX 5070Ti**: 20 FPS
+- **Jetson Orin NX**: 7.5 FPS
 
 ## Architecture
 
