@@ -65,6 +65,7 @@ Model and runtime parameters can be configured via `config/depth_anything_v3.par
 |-----------|------|---------|-------------|
 | `sky_threshold` | double | `0.3` | Threshold for sky classification from model's sky output (lower = more sky detected) |
 | `sky_depth_cap` | double | `200.0` | Maximum depth value (meters) to assign to sky pixels |
+| `publish_compressed_depth` | bool | `false` | Publish `depth_image/raw` through `image_transport` so compressed depth transport plugins can be used |
 
 ### Point Cloud Configuration
 
@@ -157,6 +158,8 @@ Where `(cx, cy)` is the principal point and `(fx, fy)` are the focal lengths fro
 Optional features:
 - **Downsampling**: Use `point_cloud_downsample_factor` to reduce point count for visualization or bandwidth
 - **Colorization**: When `colorize_point_cloud` is enabled, RGB values from the input image are added to each 3D point
+
+When `publish_compressed_depth` is enabled, the node advertises the base depth topic `depth_image/raw` with `image_transport` and internally restricts publisher plugins to `image_transport/raw` and `image_transport/compressedDepth`. This avoids `image_transport/compressed` JPEG handling, which is not appropriate for 32-bit depth images and can prevent publication.
 
 
 ## Troubleshooting

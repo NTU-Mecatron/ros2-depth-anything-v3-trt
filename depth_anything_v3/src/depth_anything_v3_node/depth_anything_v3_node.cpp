@@ -28,6 +28,8 @@ constexpr char kInputImageTopic[] = "image/raw";
 constexpr char kInputCameraInfoTopic[] = "camera_info";
 constexpr char kOutputDepthTopic[] = "depth_image/raw";
 constexpr char kOutputPointCloudTopic[] = "point_cloud";
+const std::vector<std::string> kDepthImageTransportPubPlugins{
+  "image_transport/raw", "image_transport/compressedDepth"};
 
 template <class T>
 bool update_param(
@@ -59,6 +61,7 @@ DepthAnythingV3Node::DepthAnythingV3Node(const rclcpp::NodeOptions & node_option
   node_param_.precision = declare_parameter<std::string>("precision", "fp16");
   node_param_.sky_threshold = declare_parameter<double>("sky_threshold", 0.3);
   node_param_.sky_depth_cap = declare_parameter<double>("sky_depth_cap", 200.0);
+  node_param_.publish_compressed_depth = declare_parameter<bool>("publish_compressed_depth", false);
   node_param_.publish_point_cloud = declare_parameter<bool>("publish_point_cloud", true);
   node_param_.point_cloud_downsample_factor = declare_parameter<int>("point_cloud_downsample_factor", 10);
   node_param_.colorize_point_cloud = declare_parameter<bool>("colorize_point_cloud", true);
@@ -77,6 +80,7 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
   get_parameter("precision", node_param_.precision);
   get_parameter("sky_threshold", node_param_.sky_threshold);
   get_parameter("sky_depth_cap", node_param_.sky_depth_cap);
+  get_parameter("publish_compressed_depth", node_param_.publish_compressed_depth);
   get_parameter("publish_point_cloud", node_param_.publish_point_cloud);
   get_parameter("point_cloud_downsample_factor", node_param_.point_cloud_downsample_factor);
   get_parameter("colorize_point_cloud", node_param_.colorize_point_cloud);
@@ -88,6 +92,8 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
 
   sub_image_.reset();
   sub_camera_info_.reset();
+  pub_depth_image_transport_.shutdown();
+  image_transport_node_.reset();
   pub_depth_image_.reset();
   pub_point_cloud_.reset();
   tensorrt_depth_anything_.reset();
@@ -95,6 +101,9 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
   is_initialized_ = false;
 
   RCLCPP_INFO(get_logger(), "Using model file: %s", node_param_.onnx_path.c_str());
+  RCLCPP_INFO(
+    get_logger(), "Compressed depth publishing: %s",
+    node_param_.publish_compressed_depth ? "enabled" : "disabled");
   RCLCPP_INFO(
     get_logger(), "Point cloud publishing: %s",
     node_param_.publish_point_cloud ? "enabled" : "disabled");
@@ -129,8 +138,31 @@ CallbackReturn DepthAnythingV3Node::on_configure(const rclcpp_lifecycle::State &
     return CallbackReturn::FAILURE;
   }
 
-  pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(
-    kOutputDepthTopic, rclcpp::QoS(1));
+  if (node_param_.publish_compressed_depth) {
+    auto image_transport_node_options = get_node_options();
+    image_transport_node_options.arguments({});
+    image_transport_node_options.context(get_node_options().context());
+    image_transport_node_options.use_intra_process_comms(
+      get_node_options().use_intra_process_comms());
+    image_transport_node_options.start_parameter_services(false);
+    image_transport_node_options.start_parameter_event_publisher(false);
+    image_transport_node_options.enable_rosout(false);
+
+    image_transport_node_ = std::make_shared<rclcpp::Node>(
+      std::string(get_name()) + "_image_transport_helper",
+      get_namespace(),
+      image_transport_node_options);
+    image_transport_node_->declare_parameter<std::vector<std::string>>(
+      "depth_image.raw.enable_pub_plugins", kDepthImageTransportPubPlugins);
+
+    auto qos = rmw_qos_profile_default;
+    qos.depth = 1;
+    pub_depth_image_transport_ = image_transport::create_publisher(
+      image_transport_node_.get(), kOutputDepthTopic, qos);
+  } else {
+    pub_depth_image_ = create_publisher<sensor_msgs::msg::Image>(
+      kOutputDepthTopic, rclcpp::QoS(1));
+  }
   pub_point_cloud_ = create_publisher<sensor_msgs::msg::PointCloud2>(
     kOutputPointCloudTopic, rclcpp::QoS(1));
 
@@ -191,6 +223,8 @@ CallbackReturn DepthAnythingV3Node::on_cleanup(const rclcpp_lifecycle::State &)
 {
   sub_image_.reset();
   sub_camera_info_.reset();
+  pub_depth_image_transport_.shutdown();
+  image_transport_node_.reset();
   pub_depth_image_.reset();
   pub_point_cloud_.reset();
   tensorrt_depth_anything_.reset();
@@ -205,6 +239,8 @@ CallbackReturn DepthAnythingV3Node::on_shutdown(const rclcpp_lifecycle::State &)
 {
   sub_image_.reset();
   sub_camera_info_.reset();
+  pub_depth_image_transport_.shutdown();
+  image_transport_node_.reset();
   pub_depth_image_.reset();
   pub_point_cloud_.reset();
   tensorrt_depth_anything_.reset();
@@ -217,7 +253,9 @@ CallbackReturn DepthAnythingV3Node::on_shutdown(const rclcpp_lifecycle::State &)
 
 void DepthAnythingV3Node::onImage(const sensor_msgs::msg::Image::ConstSharedPtr & image_msg)
 {
-  if (!tensorrt_depth_anything_ || !pub_depth_image_ || !pub_point_cloud_) {
+  const bool has_depth_publisher = node_param_.publish_compressed_depth || static_cast<bool>(pub_depth_image_);
+  const bool has_point_cloud_publisher = !node_param_.publish_point_cloud || static_cast<bool>(pub_point_cloud_);
+  if (!tensorrt_depth_anything_ || !has_depth_publisher || !has_point_cloud_publisher) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 2000,
       "Skipping image because lifecycle resources are not configured");
@@ -275,7 +313,13 @@ void DepthAnythingV3Node::onImage(const sensor_msgs::msg::Image::ConstSharedPtr 
   cv_img_depth.image = depth_image;
   cv_img_depth.encoding = "32FC1";
   cv_img_depth.header = image_msg->header;
-  pub_depth_image_->publish(*cv_img_depth.toImageMsg());
+  auto depth_msg = std::make_unique<sensor_msgs::msg::Image>();
+  cv_img_depth.toImageMsg(*depth_msg);
+  if (node_param_.publish_compressed_depth) {
+    pub_depth_image_transport_.publish(std::move(depth_msg));
+  } else {
+    pub_depth_image_->publish(std::move(depth_msg));
+  }
 
   if (node_param_.publish_point_cloud) {
     sensor_msgs::msg::PointCloud2 point_cloud = tensorrt_depth_anything_->getPointCloud();
@@ -300,12 +344,14 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
     for (const auto & param : params) {
       const auto & name = param.get_name();
       if (
-        (name == "onnx_path" || name == "precision") &&
-        (tensorrt_depth_anything_ || pub_depth_image_ || pub_point_cloud_))
+        (
+          name == "onnx_path" || name == "precision" ||
+          name == "publish_compressed_depth") &&
+        (tensorrt_depth_anything_ || image_transport_node_ || pub_depth_image_ || pub_point_cloud_))
       {
         result.successful = false;
         result.reason =
-          "onnx_path and precision are configure-time-only parameters.";
+          "onnx_path, precision, and publish_compressed_depth are configure-time-only parameters.";
         return result;
       }
 
@@ -325,6 +371,7 @@ rcl_interfaces::msg::SetParametersResult DepthAnythingV3Node::onSetParam(
     update_param(params, "precision", p.precision);
     update_param(params, "sky_threshold", p.sky_threshold);
     update_param(params, "sky_depth_cap", p.sky_depth_cap);
+    update_param(params, "publish_compressed_depth", p.publish_compressed_depth);
     update_param(params, "publish_point_cloud", p.publish_point_cloud);
     update_param(params, "point_cloud_downsample_factor", p.point_cloud_downsample_factor);
     update_param(params, "colorize_point_cloud", p.colorize_point_cloud);
