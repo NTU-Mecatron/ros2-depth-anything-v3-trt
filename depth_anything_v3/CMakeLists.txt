@@ -29,6 +29,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(image_transport REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV 4 REQUIRED)
@@ -99,6 +100,7 @@ ament_target_dependencies(depth_anything_v3_node
   rclcpp
   rclcpp_components
   rclcpp_lifecycle
+  image_transport
   sensor_msgs
   cv_bridge
 )
@@ -156,5 +158,5 @@ endif()
 
 ament_export_libraries(tensorrt_depth_anything depth_anything_v3_node)
 ament_export_include_directories(include)
-ament_export_dependencies(rclcpp rclcpp_components rclcpp_lifecycle sensor_msgs cv_bridge)
+ament_export_dependencies(rclcpp rclcpp_components rclcpp_lifecycle image_transport sensor_msgs cv_bridge)
 ament_package()

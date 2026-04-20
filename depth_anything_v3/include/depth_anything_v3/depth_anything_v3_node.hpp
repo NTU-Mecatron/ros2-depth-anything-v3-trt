@@ -21,6 +21,7 @@
 #include <cv_bridge/cv_bridge.h>
 #endif
 #include <atomic>
+#include <image_transport/image_transport.hpp>
 #include <memory>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -48,6 +49,7 @@ public:
     std::string precision{};
     double sky_threshold{};             // Threshold for sky classification
     double sky_depth_cap{};             // Cap for sky depth fill-in
+    bool publish_compressed_depth{};    // Whether to publish depth via image_transport
     bool publish_point_cloud{};         // Whether to generate and publish point clouds
     int point_cloud_downsample_factor{};  // Only publish every Nth point (1 = no downsampling)
     bool colorize_point_cloud{};  // Add RGB colors from input image to point cloud
@@ -68,6 +70,8 @@ private:
   void onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & camera_info_msg);
 
   // Publishers
+  rclcpp::Node::SharedPtr image_transport_node_;
+  image_transport::Publisher pub_depth_image_transport_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::Image>::SharedPtr pub_depth_image_;
   rclcpp_lifecycle::LifecyclePublisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_point_cloud_;
 

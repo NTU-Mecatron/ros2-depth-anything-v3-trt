@@ -6,8 +6,9 @@
     sky_threshold: 0.3               # Threshold for sky classification (lower = more sky)
     sky_depth_cap: 200.0             # Maximum depth value to fill sky regions
     
-    # Point cloud output control
+    # Output configuration
     publish_point_cloud: false
+    publish_compressed_depth: false  # Publish depth_image/raw via image_transport for compressedDepth subscribers
 
     # Point cloud downsampling (1 = no downsampling, 10 = every 10th point)
     point_cloud_downsample_factor: 2
